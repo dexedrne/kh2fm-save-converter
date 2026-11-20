@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.ps2
+*.png
+*.bak
