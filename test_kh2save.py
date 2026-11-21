@@ -82,6 +82,26 @@ class ConverterTests(unittest.TestCase):
         cls.save = k.Save(k.PREFIX+b'04', 123, 456, cls.data)
         cls.png = steam_png()
 
+    def test_known_checkpoint_form_reward(self):
+        data = bytearray(self.data)
+        data[0x36c0] = 6
+        data[0x367b] = 1
+        struct.pack_into('<H', data, 0x32f4, 484)
+        struct.pack_into('<H', data, 0x332c, 484)
+        with patch.object(k, 'KNOWN_SAVE', hashlib.sha256(data).hexdigest()):
+            result = k.migrate_nmc_checkpoint(data)
+        self.assertEqual(result[0x36c0], 4)
+        self.assertEqual(result[0x36ca], 8)
+        self.assertEqual(result[0x367b], 0)
+        self.assertEqual(result[0x36b8], 1)
+        self.assertEqual(struct.unpack_from('<H', result, 0x333e), (0x81a7,))
+        self.assertEqual(struct.unpack_from('<H', result, 0x337c), (0x823b,))
+        self.assertEqual(result[0x337e:0x339c], bytes(30))
+        self.assertEqual(struct.unpack_from('<H', result, 0x32f4), (0,))
+        self.assertEqual(struct.unpack_from('<H', result, 0x3364), (480,))
+        self.assertEqual(result[0x32f6:0x333e], data[0x32f6:0x333e])
+        self.assertEqual(result[0x3366:0x336c], data[0x3366:0x336c])
+
     def test_fragmented_image_and_bad_fat(self):
         raw = image(self.data)
         self.assertEqual(k.read_card(raw)[0].data, self.data)

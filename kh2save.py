@@ -188,6 +188,20 @@ def migrate_nmc_checkpoint(payload):
     # PC 0x2809 clears the world initializer 0x282a. Only the earlier
     # prologue flag 0x800 sets it. Both have already run on this checkpoint.
     data[0x1c90 + 10*32 + 0x2a//8] &= ~(1 << (0x2a % 8))
+    # tt28 event 808: PS2 Valor is the Bladeless equipment menu; PC awards Limit.
+    data[0x36c0] &= ~(1 << 1)
+    data[0x36ca] |= 1 << 3
+    data[0x36b8] = 1  # Treasure 610 awards the first Limit command, Dual Shot.
+    struct.pack_into('<H', data, 0x32f4, 0)  # Bladeless already holds the mirrored weapon.
+    # Move the event's Midnight Roar from stock to the new Limit off hand.
+    data[0x367b] -= 1
+    struct.pack_into('<H', data, 0x3364, 480)
+    # Preserve earned Bladeless skills and add its PC starting support ability.
+    struct.pack_into('<H', data, 0x3334 + 2*5, 0x81a7)
+    # The unearned PS2 Limit record has all four limits enabled. PC starts
+    # with plrp row 15 plus Dual Shot from event 808 (matches native slot 3).
+    limit_skills = (0x823d, 0x823e, 0x823f, 0x824b, 0x824d, 0x8052, 0x81a7, 0x80df, 0x823b)
+    struct.pack_into('<24H', data, 0x336c, *limit_skills, *([0] * (24-len(limit_skills))))
     struct.pack_into('<I', data, 8, checksum(data))
     return bytes(data)
 

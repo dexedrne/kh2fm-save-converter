@@ -25,6 +25,6 @@ Open **Load Game** in Steam and choose slot 2. The converter reads the memory ca
 
 **What carries over?** The campaign carries its recorded progress, inventory and stats. The Steam system file and other slots are preserved. PC-only content such as Holo-Archive history has no equivalent PS2 record.
 
-**What about mods?** Use a matching PC version of the mod. Mods can rename rooms and difficulty levels or interpret story flags differently. The list uses vanilla difficulty names alongside their numeric values. By default, the converter carries the campaign bytes across directly. The optional `--nmc-rmc` applies a known room and story-flag migration for one specific level-25 Underworld Entrance checkpoint from Nobody May Cry V0.20 to RMC. Other checkpoints are refused with that option.
+**What about mods?** Use a matching PC version of the mod. Mods can rename rooms and difficulty levels or interpret story flags differently. The list uses vanilla difficulty names alongside their numeric values. By default, the converter carries the campaign bytes across directly. The optional `--nmc-rmc` applies a known room, story-flag and Drive Form migration for one specific level-25 Underworld Entrance checkpoint from Nobody May Cry V0.20 to RMC. Other checkpoints are refused with that option.
 
 **Can I use someone else’s Steam PNG?** Use your own account’s file. Steam encodes the system directory for that account. Save once in the PC game to initialize it.
