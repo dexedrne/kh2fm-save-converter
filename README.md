@@ -28,3 +28,9 @@ Open **Load Game** in Steam and choose slot 2. The converter reads the memory ca
 **What about mods?** Use a matching PC version of the mod. Mods can rename rooms and difficulty levels or interpret story flags differently. The list uses vanilla difficulty names alongside their numeric values. By default, the converter carries the campaign bytes across directly. The optional `--nmc-rmc` applies a known room, story-flag and Drive Form migration for one specific level-25 Underworld Entrance checkpoint from Nobody May Cry V0.20 to RMC. Other checkpoints are refused with that option.
 
 **Can I use someone else’s Steam PNG?** Use your own account’s file. Steam encodes the system directory for that account. Save once in the PC game to initialize it.
+
+## more kingdom hearts stuff
+
+- [NMC Fixed](https://github.com/dexedrne/NMC-Fixed): the original mod with every fix and addition, for the Steam version through OpenKH
+- [Nobody May Cry: Recompiled](https://github.com/dexedrne/nmc-recomp): the game and the mod recompiled to run natively on iPhone, macOS and Linux
+- [nmc-decomposed](https://github.com/dexedrne/nmc-decomposed): the mod as readable patches, rebuilt from your own copy of the game
