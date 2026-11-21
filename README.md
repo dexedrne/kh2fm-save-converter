@@ -31,6 +31,7 @@ Open **Load Game** in Steam and choose slot 2. The converter reads the memory ca
 
 ## more kingdom hearts stuff
 
+- [Roxas May Cry](https://github.com/dexedrne/roxas-may-cry): the Roxas campaign played to the end, built on your PC from your own game files
 - [NMC Fixed](https://github.com/dexedrne/NMC-Fixed): the original mod with every fix and addition, for the Steam version through OpenKH
 - [Nobody May Cry: Recompiled](https://github.com/dexedrne/nmc-recomp): the game and the mod recompiled to run natively on iPhone, macOS and Linux
 - [nmc-decomposed](https://github.com/dexedrne/nmc-decomposed): the mod as readable patches, rebuilt from your own copy of the game
