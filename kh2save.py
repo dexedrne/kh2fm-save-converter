@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import a Japanese Kingdom Hearts II Final Mix PS2 save into a Steam save."""
+"""Import a Kingdom Hearts II Final Mix campaign from a PCSX2 memory card into Steam."""
 import argparse
 import hashlib
 import os
@@ -37,6 +37,8 @@ def crc_table():
 
 
 PREFIX = b'BISLPM-66675FM-'
+US_PREFIX = b'BASLUS-21005FM-'
+CAMPAIGN_NAME = re.compile(rb'(?:' + PREFIX + b'|' + US_PREFIX + rb')[0-9]{2}')
 HEADER = b'KH2J\x3a\0\0\0'
 TABLE = crc_table()
 PNG = b'\x89PNG\r\n\x1a\n'
@@ -86,16 +88,32 @@ def timestamp(entry, pos):
                         tzinfo=timezone(timedelta(hours=9))).timestamp())
 
 
-def validate_save(data):
-    require(len(data) == SIZE and data[:8] == HEADER, 'invalid KH2FM campaign header or size; '
-            'only JP Final Mix is supported (US/EU KH2 uses a different format)')
+def validate_save(data, header=HEADER):
+    require(len(data) == SIZE and data[:8] == header, 'invalid KH2FM campaign header or size')
     require(checksum(data) == u32(data, 8), 'invalid KH2FM campaign checksum')
     require(data[12] < len(WORLDS) and data[13] < 64 and u32(data, 0x2498) < 4,
             'invalid KH2FM campaign summary')
 
 
+def source_campaign(name, data):
+    if name.startswith(US_PREFIX) and data[:4] == b'KH2U':
+        validate_save(data, b'KH2U' + HEADER[4:])
+        data = bytearray(data)
+        data[:4] = HEADER[:4]
+        struct.pack_into('<I', data, 8, checksum(data))
+        return bytes(data)
+    validate_save(data)
+    return data
+
+
 def read_card(raw):
-    require(len(raw) >= 512 and raw[:28] == b'Sony PS2 Memory Card Format ', 'invalid PS2 superblock')
+    if raw[:28] != b'Sony PS2 Memory Card Format ':
+        card_sizes = (pages * stride for pages in (16384, 32768, 65536, 131072)
+                      for stride in (512, 528))
+        if len(raw) in card_sizes and raw.count(255) == len(raw):
+            raise ValueError('blank PS2 card (all bytes erased); no saves')
+        raise ValueError('invalid PS2 superblock')
+    require(len(raw) >= 512, 'truncated PS2 superblock')
     page, ppc, erase = struct.unpack_from('<HHH', raw, 40)
     count, base, limit, root = struct.unpack_from('<4I', raw, 48)
     require((page, ppc, erase) == (512, 2, 16) and count in (8192, 16384, 32768, 65536),
@@ -158,14 +176,14 @@ def read_card(raw):
     require(root_header[64:66] == b'.\0', 'missing root directory')
     saves = {}
     for name, mode, folder in entries(root, u32(root_header, 4)):
-        if not re.fullmatch(PREFIX+rb'[0-9]{2}', name):
+        if not CAMPAIGN_NAME.fullmatch(name):
             continue
         require(mode & 0x20 and name not in saves, 'invalid or duplicate KH2 directory')
         files = [r for n, m, r in entries(u32(folder, 16), u32(folder, 4)) if n == name and m & 0x10]
         require(len(files) == 1, f'missing or duplicate file in {name.decode()}')
         row = files[0]
         data = read_chain(u32(row, 16), u32(row, 4))
-        validate_save(data)
+        data = source_campaign(name, data)
         saves[name] = Save(name, timestamp(row, 8), timestamp(row, 24), data)
     return [saves[n] for n in sorted(saves)]
 
@@ -210,16 +228,16 @@ def inventory(path):
     if path.is_dir():
         saves = []
         for folder in sorted(path.iterdir()):
-            if not re.fullmatch(r'BISLPM-66675FM-[0-9]{2}', folder.name):
+            name = os.fsencode(folder.name)
+            if not CAMPAIGN_NAME.fullmatch(name):
                 continue
             file = folder / folder.name
-            data = file.read_bytes()
-            validate_save(data)
+            data = source_campaign(name, file.read_bytes())
             modified = int(file.stat().st_mtime)
-            saves.append(Save(folder.name.encode('ascii'), modified, modified, data))
+            saves.append(Save(name, modified, modified, data))
     else:
         saves = read_card(path.read_bytes())
-    require(saves, 'no JP Final Mix campaign (SLPM-66675) found. Original US/EU KH2 '
+    require(saves, 'no JP or US-edition Final Mix campaign found. Original US/EU KH2 '
             'saves use a different format. Other games and regions are unsupported.')
     return saves
 
@@ -240,8 +258,6 @@ def container(png):
             require(region is None, 'duplicate sqEX')
             require(size == (DATA + COUNT * SIZE + 1023) // 1024 * 1024, 'wrong sqEX size')
             region = (pos+8, end)
-        if tag == b'khXb':
-            raise ValueError('custom port marker present; select a Steam save')
         if tag == b'IEND':
             require(size == 0 and end+4 == len(png) and region, 'invalid PNG ending or missing sqEX')
             return region
@@ -266,6 +282,8 @@ def directory(card, steam_id=None):
         offset = 16 + physical * ROW
         field = card[offset:offset+64]
         if not any(field):
+            start = DATA + physical * SIZE
+            require(not any(card[start:start+SIZE]), f'unnamed payload in Steam row {physical}')
             continue
         match = re.fullmatch(PREFIX + rb'([0-9]{2})\x00+', field)
         require(match and u32(card, offset+80) == SIZE, f'invalid Steam directory row {physical}')
@@ -338,12 +356,12 @@ def save_result(args, save, target):
     original = target.read_bytes()
     steam_id = target.parent.name if re.fullmatch(r'[0-9]{17}', target.parent.name) else None
     result = insert(original, save, args.slot, args.replace, args.nmc_rmc, steam_id)
-    backup = target.with_name(target.name + datetime.now(timezone.utc).strftime('.%Y%m%dT%H%M%S.%fZ.bak'))
-    write_new(backup, original)
-    print(f'Backup: {backup}', flush=True)
     if args.out is not None:
         write_new(args.out, result)
         return
+    backup = target.with_name(target.name + datetime.now(timezone.utc).strftime('.%Y%m%dT%H%M%S.%fZ.bak'))
+    write_new(backup, original)
+    print(f'Backup: {backup}', flush=True)
     f = tempfile.NamedTemporaryFile(dir=target.parent, delete=False)
     temp = Path(f.name)
     try:
@@ -362,10 +380,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
     listing = commands.add_parser('list', help='list supported PS2 saves')
-    listing.add_argument('card', type=Path)
+    listing.add_argument('card', type=Path, help='PCSX2 .ps2 image or folder card')
     edit = commands.add_parser('convert', help='insert one source slot into an existing Steam save')
-    edit.add_argument('card', type=Path)
-    edit.add_argument('--source', required=True, type=int, help='PS2 slot number shown by list')
+    edit.add_argument('card', type=Path, help='PCSX2 .ps2 image or folder card')
+    edit.add_argument('--source', required=True, help='PS2 slot number or exact folder name shown by list')
     edit.add_argument('--into', required=True, type=Path, help='existing KHIIFM_WW.png')
     edit.add_argument('--slot', required=True, type=int, help='destination Steam slot (1..99)')
     edit.add_argument('--out', type=Path, help='write a separate, new file')
@@ -373,23 +391,24 @@ def main():
     edit.add_argument('--nmc-rmc', action='store_true', help='apply the supported NMC checkpoint migration')
     args = parser.parse_args()
     saves = inventory(args.card)
-    if args.command == 'list':
-        print('PS2 slot\tFolder\tLocation\tLevel\tPlay time\tDifficulty')
+    if args.command == 'convert':
+        matches = [s for s in saves if args.source == s.name.decode()
+                   or (args.source.isascii() and args.source.isdecimal()
+                       and int(args.source) == int(s.name[-2:]) + 1)]
+        require(matches, f'no supported PS2 save in slot {args.source}')
+        require(len(matches) == 1, 'ambiguous PS2 slot; use --source with the exact folder name')
+        convert(args, matches[0])
+        print(f'Wrote Steam slot {args.slot} to {args.out or args.into}')
+        return
+    print('PS2 slot\tFolder\tLocation\tLevel\tPlay time\tDifficulty')
     for save in saves:
         number = int(save.name[-2:]) + 1
-        if args.command == 'list':
-            p = save.data
-            sec = u32(p, 0x2444) // 60
-            difficulty = u32(p, 0x2498)
-            print(number, save.name.decode(), f'{WORLDS[p[12]]}{p[13]:02}', p[0x24ff],
-                  f'{sec//3600}:{sec//60%60:02}:{sec%60:02}',
-                  f'{difficulty} ({DIFFICULTY[difficulty]})', sep='\t')
-        elif args.source == number:
-            convert(args, save)
-            print(f'Wrote Steam slot {args.slot} to {args.out or args.into}')
-            return
-    if args.command == 'convert':
-        raise ValueError(f'no supported PS2 save in slot {args.source}')
+        p = save.data
+        sec = u32(p, 0x2444) // 60
+        difficulty = u32(p, 0x2498)
+        print(number, save.name.decode(), f'{WORLDS[p[12]]}{p[13]:02}', p[0x24ff],
+              f'{sec//3600}:{sec//60%60:02}:{sec%60:02}',
+              f'{difficulty} ({DIFFICULTY[difficulty]})', sep='\t')
 
 
 if __name__ == '__main__':

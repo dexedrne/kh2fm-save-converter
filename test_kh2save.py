@@ -43,7 +43,7 @@ def steam_png():
             + chunk(b'IDAT', zlib.compress(bytes(2))) + chunk(b'IEND', b''))
 
 
-def image(payload):
+def image(payload, name=k.PREFIX + b'04'):
     raw = bytearray(8192 * 1024)
     raw[:28] = b'Sony PS2 Memory Card Format '
     struct.pack_into('<3H', raw, 40, 512, 2, 16)
@@ -61,7 +61,6 @@ def image(payload):
             struct.pack_into('<6BH', raw, pos+field, 0, 0, 0, 12, 1, 1, 2020)
         raw[pos+64:pos+64+len(name)] = name
 
-    name = k.PREFIX + b'04'
     entry(0, 0, 0x8020, b'.', 2, 0)
     entry(0, 1, 0x8020, name, 1, 1)
     entry(1, 0, 0x8010, name, len(payload), 2)
@@ -108,6 +107,80 @@ class ConverterTests(unittest.TestCase):
         struct.pack_into('<I', raw, 2048+8, 0x80000002)
         with self.assertRaisesRegex(ValueError, 'cyclic'):
             k.read_card(raw)
+
+    def test_four_difficulties_preserve_campaign_bytes(self):
+        for difficulty in range(4):
+            with self.subTest(difficulty=difficulty):
+                data = bytearray(bytes(range(256)) * (k.SIZE // 256 + 1))[:k.SIZE]
+                data[:8] = k.HEADER
+                data[12:14] = bytes((4, 9))
+                struct.pack_into('<I', data, 0x2498, difficulty)
+                struct.pack_into('<I', data, 8, k.checksum(data))
+                save, = k.read_card(image(data))
+                png = k.insert(self.png, save, 1)
+                a, _ = k.container(png)
+                start = a + k.DATA + k.SIZE
+                self.assertEqual(png[start:start+k.SIZE], data)
+
+    def test_malformed_inputs(self):
+        with self.assertRaisesRegex(ValueError, 'blank PS2 card'):
+            k.read_card(b'\xff' * (16384 * 528))
+        with self.assertRaisesRegex(ValueError, 'superblock'):
+            k.read_card(b'not a memory card')
+        with self.assertRaisesRegex(ValueError, 'image length'):
+            k.read_card(image(self.data)[:-1])
+        with self.assertRaisesRegex(ValueError, 'documented checkpoint'):
+            k.migrate_nmc_checkpoint(self.data)
+        a, b = k.container(self.png)
+        with self.assertRaisesRegex(ValueError, 'duplicate sqEX'):
+            k.container(self.png[:b+4] + self.png[a-8:])
+        with self.assertRaisesRegex(ValueError, 'ending'):
+            k.container(self.png[:-12])
+
+    def test_us_final_mix_image_and_vanilla_us_card(self):
+        name = k.US_PREFIX + b'04'
+        us = bytearray(self.data)
+        us[:4] = b'KH2U'
+        struct.pack_into('<I', us, 8, k.checksum(us))
+        save, = k.read_card(image(us, name))
+        self.assertEqual(save.data, self.data)
+        self.assertEqual(save.name, name)
+        us[-1] ^= 1
+        with self.assertRaisesRegex(ValueError, 'checksum'):
+            k.read_card(image(us, name))
+        self.assertEqual(k.read_card(image(us, b'BASLUS-21005-04')), [])
+
+    def test_all_numbered_slots_on_full_card(self):
+        a, b = k.container(self.png)
+        card = bytearray(self.png[a:b])
+        for physical in range(1, k.COUNT):
+            slot = k.COUNT - physical
+            row = 16 + physical * k.ROW
+            name = k.PREFIX + f'{slot-1:02}'.encode()
+            card[row:row+len(name)] = name
+            struct.pack_into('<I', card, row+80, k.SIZE)
+            start = k.DATA + physical * k.SIZE
+            card[start:start+k.SIZE] = self.data
+        png = self.png[:a-8] + chunk(b'sqEX', card) + self.png[b+4:]
+        with self.assertRaisesRegex(ValueError, 'occupied'):
+            k.insert(png, self.save, 1)
+        result = k.insert(png, self.save, 1, replace=True)
+        updated = result[a:b]
+        self.assertEqual(k.directory(updated), {n: 100-n for n in range(1, 100)})
+        row = 16 + 99 * k.ROW
+        self.assertEqual(struct.unpack_from('<qq', updated, row+64), (123, 456))
+        self.assertEqual(updated[:row], card[:row])
+        self.assertEqual(updated[row+k.ROW:], card[row+k.ROW:])
+
+    def test_unknown_slot_and_orphan_payload(self):
+        a, b = k.container(self.png)
+        card = bytearray(self.png[a:b])
+        card[k.DATA+k.SIZE] = 1
+        with self.assertRaisesRegex(ValueError, 'unnamed payload'):
+            k.directory(card)
+        card[16+k.ROW] = 1
+        with self.assertRaisesRegex(ValueError, 'invalid Steam directory'):
+            k.directory(card)
 
     def test_ecc(self):
         self.assertEqual(k.ecc(bytes(128)), bytes((0x77, 127, 127)))
@@ -203,15 +276,23 @@ class ConverterTests(unittest.TestCase):
             self.assertIn('source card', run(*args, '--out', card/'new.png', ok=False))
             out = root/'new.png'
             run(*args, '--out', out)
+            self.assertFalse(list(root.glob('*.bak')))
             self.assertEqual(pc.read_bytes(), self.png)
             self.assertIn('already exists', run(*args, '--out', out, ok=False))
             run(*args)
             self.assertEqual(pc.read_bytes(), out.read_bytes())
             backups = list(root.glob('pc.png.*.bak'))
-            self.assertEqual(len(backups), 2)
+            self.assertEqual(len(backups), 1)
             self.assertTrue(all(b.read_bytes() == self.png for b in backups))
             self.assertIn('occupied', run(*args, ok=False))
             run(*args, '--replace')
+            us = card/(k.US_PREFIX+b'04').decode()
+            us.mkdir()
+            (us/us.name).write_bytes(self.data)
+            self.assertIn('ambiguous', run(*args, ok=False))
+            run('convert', card, '--source', us.name, '--into', pc, '--slot', 1)
+            self.assertIn('no supported', run('convert', card, '--source', 6,
+                          '--into', pc, '--slot', 3, ok=False))
             self.assertEqual(source.read_bytes(), self.data)
             self.assertEqual(len(list(root.glob('*.bak'))), 3)
 
